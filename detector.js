@@ -1,24 +1,19 @@
 #!/usr/bin/env node
 
 /**
- * Shai-Hulud 2.0 Global NPM Package Security Checker
+ * Shai-Hulud 2.0 Deep Package Scanner
  * 
- * This script checks your globally installed npm packages against the
- * Shai-Hulud 2.0 compromised packages list.
+ * Scans package.json AND the entire dependency tree for compromised packages
  * 
  * Usage:
- *   1. Save npm list output: npm list -g --depth=10 --json > global-packages.json
- *   2. Run this script: node check-packages.js at your codes root level
- * 
- * Or run directly with inline command:
- *   node check-packages.js --inline
+ *   node detector.js
+ *   node detector.js /path/to/package.json
  */
 
 const https = require('https');
-const { execSync } = require('child_process');
 const fs = require('fs');
+const path = require('path');
 
-// ANSI color codes for terminal output
 const colors = {
   reset: '\x1b[0m',
   red: '\x1b[31m',
@@ -30,278 +25,337 @@ const colors = {
   bold: '\x1b[1m'
 };
 
-// URLs for compromised packages lists
 const COMPROMISED_SOURCES = [
   'https://raw.githubusercontent.com/gensecaihq/Shai-Hulud-2.0-Detector/main/compromised-packages.json',
-  'https://raw.githubusercontent.com/tenable/shai-hulud-second-coming-affected-packages/main/list.json'
+  'https://raw.githubusercontent.com/tenable/shai-hulud-second-coming-affected-packages/main/list.json',
+  'https://raw.githubusercontent.com/Cobenian/shai-hulud-detect/main/compromised-packages.txt',
+  'https://raw.githubusercontent.com/tenable/shai-hulud-second-coming-affected-packages/main/list.md'
 ];
 
-/**
- * Fetch data from URL
- */
 function fetchUrl(url) {
   return new Promise((resolve, reject) => {
     https.get(url, (res) => {
       let data = '';
-      
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-      
+      res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
         if (res.statusCode === 200) {
           resolve(data);
         } else {
-          reject(new Error(`Failed to fetch ${url}: ${res.statusCode}`));
+          reject(new Error(`HTTP ${res.statusCode}`));
         }
       });
-    }).on('error', (err) => {
-      reject(err);
-    });
+    }).on('error', reject);
   });
 }
 
-/**
- * Fetch compromised packages list
- */
-async function fetchCompromisedPackages() {
-  console.log(`${colors.blue}Fetching compromised packages list...${colors.reset}`);
-  
-  for (const url of COMPROMISED_SOURCES) {
-    try {
-      const data = await fetchUrl(url);
-      const parsed = JSON.parse(data);
-      console.log(`${colors.green}✓ Successfully fetched compromised packages from source${colors.reset}`);
-      return parsed;
-    } catch (err) {
-      console.warn(`${colors.yellow}⚠ Failed to fetch from ${url}: ${err.message}${colors.reset}`);
-    }
-  }
-  
-  throw new Error('Failed to fetch compromised packages from all sources');
-}
-
-/**
- * Get global npm packages
- */
-function getGlobalPackages(useInline = false) {
-  console.log(`${colors.blue}Retrieving global npm packages...${colors.reset}`);
-  
-  if (!useInline && fs.existsSync('global-packages.json')) {
-    console.log(`${colors.cyan}Reading from global-packages.json${colors.reset}`);
-    const data = fs.readFileSync('global-packages.json', 'utf8');
-    return JSON.parse(data);
-  }
-  
-  console.log(`${colors.cyan}Running: npm list -g --depth=10 --json${colors.reset}`);
-  try {
-    const output = execSync('npm list -g --depth=10 --json', {
-      encoding: 'utf8',
-      maxBuffer: 10 * 1024 * 1024 // 10MB buffer
-    });
-    return JSON.parse(output);
-  } catch (err) {
-    // npm list returns non-zero exit code if there are issues, but still outputs JSON
-    if (err.stdout) {
-      return JSON.parse(err.stdout);
-    }
-    throw err;
-  }
-}
-
-/**
- * Flatten npm dependency tree
- */
-function flattenDependencies(deps, result = new Map()) {
-  if (!deps) return result;
-  
-  for (const [name, info] of Object.entries(deps)) {
-    if (info.version) {
-      result.set(`${name}@${info.version}`, {
-        name,
-        version: info.version,
-        path: info.path || 'unknown'
-      });
-    }
-    
-    if (info.dependencies) {
-      flattenDependencies(info.dependencies, result);
-    }
-  }
-  
-  return result;
-}
-
-/**
- * Parse compromised packages list (supports multiple formats)
- */
 function parseCompromisedList(data) {
   const compromised = new Map();
   
-  // Handle gensecaihq format
-  if (data.packages && Array.isArray(data.packages)) {
-    data.packages.forEach(pkg => {
-      const key = `${pkg.name}@${pkg.version}`;
-      compromised.set(key, {
-        name: pkg.name,
-        version: pkg.version,
-        severity: pkg.severity || 'high',
-        source: pkg.source || 'unknown'
-      });
+  if (typeof data === 'string') {
+    const lines = data.split('\n');
+    lines.forEach(line => {
+      line = line.trim();
+      if (!line || line.startsWith('#') || line.startsWith('|')) return;
+      
+      if (line.includes('|')) {
+        const parts = line.split('|').map(p => p.trim()).filter(Boolean);
+        if (parts.length >= 2 && parts[0] && parts[1]) {
+          const name = parts[0];
+          const version = parts[1];
+          if (name !== 'Package' && version !== 'Version') {
+            if (!compromised.has(name)) {
+              compromised.set(name, []);
+            }
+            compromised.get(name).push(version);
+          }
+        }
+        return;
+      }
+      
+      const match = line.match(/^([^:@]+)[:@](.+)$/);
+      if (match) {
+        const [, name, version] = match;
+        const cleanName = name.trim();
+        const cleanVersion = version.trim();
+        if (!compromised.has(cleanName)) {
+          compromised.set(cleanName, []);
+        }
+        compromised.get(cleanName).push(cleanVersion);
+      }
     });
-  }
-  // Handle Tenable format (array of objects)
-  else if (Array.isArray(data)) {
-    data.forEach(pkg => {
-      const key = `${pkg.package}@${pkg.version}`;
-      compromised.set(key, {
-        name: pkg.package,
-        version: pkg.version,
-        severity: 'critical',
-        source: 'tenable'
+  } else if (typeof data === 'object') {
+    if (data.packages && Array.isArray(data.packages)) {
+      data.packages.forEach(pkg => {
+        const name = pkg.name || pkg.package;
+        const version = pkg.version;
+        if (!compromised.has(name)) {
+          compromised.set(name, []);
+        }
+        compromised.get(name).push(version);
       });
-    });
-  }
-  // Handle simple array format
-  else if (data.compromisedPackages && Array.isArray(data.compromisedPackages)) {
-    data.compromisedPackages.forEach(pkgStr => {
-      const [name, version] = pkgStr.split('@');
-      compromised.set(pkgStr, {
-        name,
-        version,
-        severity: 'high',
-        source: 'list'
+    } else if (Array.isArray(data)) {
+      data.forEach(pkg => {
+        const name = pkg.package || pkg.name;
+        const version = pkg.version;
+        if (!compromised.has(name)) {
+          compromised.set(name, []);
+        }
+        compromised.get(name).push(version);
       });
-    });
+    }
   }
   
   return compromised;
 }
 
-/**
- * Check for compromised packages
- */
-function checkForCompromised(installedPackages, compromisedList) {
-  const found = [];
+async function fetchAllCompromisedPackages() {
+  const allCompromised = new Map();
   
-  for (const [key, pkg] of installedPackages) {
-    if (compromisedList.has(key)) {
-      const compromisedInfo = compromisedList.get(key);
-      found.push({
-        ...pkg,
-        ...compromisedInfo
-      });
+  console.log(`${colors.blue}Fetching compromised packages from multiple sources...${colors.reset}\n`);
+  
+  for (let i = 0; i < COMPROMISED_SOURCES.length; i++) {
+    const url = COMPROMISED_SOURCES[i];
+    try {
+      console.log(`Fetching source ${i + 1}/${COMPROMISED_SOURCES.length}...`);
+      const data = await fetchUrl(url);
+      
+      let parsed;
+      try {
+        parsed = JSON.parse(data);
+      } catch {
+        parsed = data;
+      }
+      
+      const sourceCompromised = parseCompromisedList(parsed);
+      for (const [name, versions] of sourceCompromised) {
+        if (!allCompromised.has(name)) {
+          allCompromised.set(name, []);
+        }
+        allCompromised.get(name).push(...versions);
+      }
+      
+      console.log(`${colors.green}✓ Success${colors.reset}`);
+    } catch (err) {
+      console.log(`${colors.yellow}⚠ Failed: ${err.message}${colors.reset}`);
     }
   }
   
-  return found;
-}
-
-/**
- * Display results
- */
-function displayResults(compromisedFound, totalPackages) {
-  console.log('\n' + '='.repeat(80));
-  console.log(`${colors.bold}${colors.cyan}SCAN RESULTS${colors.reset}`);
-  console.log('='.repeat(80));
-  
-  console.log(`\nTotal packages scanned: ${colors.blue}${totalPackages}${colors.reset}`);
-  console.log(`Compromised packages found: ${compromisedFound.length > 0 ? colors.red : colors.green}${compromisedFound.length}${colors.reset}`);
-  
-  if (compromisedFound.length === 0) {
-    console.log(`\n${colors.green}${colors.bold}✓ No compromised packages detected!${colors.reset}`);
-    console.log(`${colors.green}Your global npm packages appear to be clean.${colors.reset}`);
-    return;
+  // Deduplicate versions
+  for (const [name, versions] of allCompromised) {
+    allCompromised.set(name, [...new Set(versions)]);
   }
   
-  console.log(`\n${colors.red}${colors.bold}⚠ CRITICAL: Compromised packages detected!${colors.reset}\n`);
-  
-  compromisedFound.forEach((pkg, index) => {
-    console.log(`${colors.red}${index + 1}. ${pkg.name}@${pkg.version}${colors.reset}`);
-    console.log(`   ${colors.yellow}Severity: ${pkg.severity.toUpperCase()}${colors.reset}`);
-    console.log(`   Path: ${pkg.path}`);
-    console.log('');
-  });
-  
-  console.log('='.repeat(80));
-  console.log(`${colors.red}${colors.bold}IMMEDIATE ACTIONS REQUIRED:${colors.reset}`);
-  console.log('='.repeat(80));
-  console.log(`
-1. ${colors.yellow}DO NOT RUN any of the compromised packages${colors.reset}
-2. ${colors.yellow}Uninstall immediately:${colors.reset}`);
-  
-  compromisedFound.forEach(pkg => {
-    console.log(`   npm uninstall -g ${pkg.name}`);
-  });
-  
-  console.log(`
-3. ${colors.yellow}Assume credentials are compromised:${colors.reset}
-   - Rotate all GitHub tokens and npm tokens
-   - Check for unauthorized GitHub repositories with "Sha1-Hulud: The Second Coming"
-   - Review GitHub Actions workflows for suspicious runners named "SHA1HULUD"
-   - Scan for files: setup_bun.js, bun_environment.js, actionsSecrets.json
-
-4. ${colors.yellow}Clear npm cache:${colors.reset}
-   npm cache clean --force
-
-5. ${colors.yellow}Scan your system for malicious files:${colors.reset}
-   - Look for .truffler-cache directory
-   - Check ~/.ssh, ~/.aws, ~/.config for unauthorized changes
-   
-6. ${colors.yellow}Review resources:${colors.reset}
-   - Wiz Investigation: https://www.wiz.io/blog/shai-hulud-2-0-ongoing-supply-chain-attack
-   - Unit 42 Report: https://unit42.paloaltonetworks.com/npm-supply-chain-attack/
-   - Tenable FAQ: https://www.tenable.com/blog/faq-about-sha1-hulud-2-0-the-second-coming-of-the-npm-supply-chain-campaign
-`);
-  
-  console.log('='.repeat(80));
+  console.log(`\n${colors.green}Total unique packages: ${allCompromised.size}${colors.reset}\n`);
+  return allCompromised;
 }
 
-/**
- * Main execution
- */
+function readPackageJson(packageJsonPath) {
+  try {
+    const content = fs.readFileSync(packageJsonPath, 'utf8');
+    return JSON.parse(content);
+  } catch (err) {
+    throw new Error(`Failed to read package.json: ${err.message}`);
+  }
+}
+
+function getAllInstalledPackages(nodeModulesPath, scanned = new Map()) {
+  if (!fs.existsSync(nodeModulesPath)) {
+    return scanned;
+  }
+  
+  try {
+    const entries = fs.readdirSync(nodeModulesPath, { withFileTypes: true });
+    
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      
+      // Handle scoped packages (@scope/package)
+      if (entry.name.startsWith('@')) {
+        const scopePath = path.join(nodeModulesPath, entry.name);
+        const scopedPackages = fs.readdirSync(scopePath, { withFileTypes: true });
+        
+        for (const scopedPkg of scopedPackages) {
+          if (!scopedPkg.isDirectory()) continue;
+          
+          const packageName = `${entry.name}/${scopedPkg.name}`;
+          const packagePath = path.join(scopePath, scopedPkg.name);
+          const packageJsonPath = path.join(packagePath, 'package.json');
+          
+          if (fs.existsSync(packageJsonPath) && !scanned.has(packageName)) {
+            try {
+              const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+              scanned.set(packageName, {
+                version: pkg.version,
+                path: packagePath
+              });
+              
+              // Recursively scan nested node_modules
+              const nestedNodeModules = path.join(packagePath, 'node_modules');
+              if (fs.existsSync(nestedNodeModules)) {
+                getAllInstalledPackages(nestedNodeModules, scanned);
+              }
+            } catch (err) {
+              // Skip invalid package.json
+            }
+          }
+        }
+      } else {
+        // Regular package
+        const packageName = entry.name;
+        const packagePath = path.join(nodeModulesPath, entry.name);
+        const packageJsonPath = path.join(packagePath, 'package.json');
+        
+        if (fs.existsSync(packageJsonPath) && !scanned.has(packageName)) {
+          try {
+            const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+            scanned.set(packageName, {
+              version: pkg.version,
+              path: packagePath
+            });
+            
+            // Recursively scan nested node_modules
+            const nestedNodeModules = path.join(packagePath, 'node_modules');
+            if (fs.existsSync(nestedNodeModules)) {
+              getAllInstalledPackages(nestedNodeModules, scanned);
+            }
+          } catch (err) {
+            // Skip invalid package.json
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`${colors.yellow}Warning: Could not scan ${nodeModulesPath}: ${err.message}${colors.reset}`);
+  }
+  
+  return scanned;
+}
+
+function scanAllPackages(projectRoot, compromisedList) {
+  const nodeModulesPath = path.join(projectRoot, 'node_modules');
+  
+  console.log(`${colors.cyan}Scanning entire dependency tree in node_modules...${colors.reset}\n`);
+  
+  const allPackages = getAllInstalledPackages(nodeModulesPath);
+  
+  console.log(`${colors.blue}Found ${allPackages.size} installed packages (including transitive dependencies)${colors.reset}\n`);
+  
+  const results = {
+    compromised: [],
+    suspicious: [],
+    safe: 0,
+    totalScanned: allPackages.size
+  };
+  
+  for (const [name, info] of allPackages) {
+    const compromisedVersions = compromisedList.get(name);
+    
+    if (compromisedVersions) {
+      if (compromisedVersions.includes(info.version)) {
+        results.compromised.push({
+          name,
+          installedVersion: info.version,
+          compromisedVersions,
+          path: info.path
+        });
+      } else {
+        results.suspicious.push({
+          name,
+          installedVersion: info.version,
+          compromisedVersions,
+          path: info.path
+        });
+      }
+    } else {
+      results.safe++;
+    }
+  }
+  
+  return results;
+}
+
+function printResults(results) {
+  console.log('='.repeat(80));
+  console.log(`${colors.bold}${colors.magenta}DEEP SCAN RESULTS${colors.reset}`);
+  console.log('='.repeat(80) + '\n');
+  
+  console.log(`Total packages scanned: ${colors.cyan}${results.totalScanned}${colors.reset} (including all transitive dependencies)\n`);
+  
+  if (results.compromised.length > 0) {
+    console.log(`${colors.red}${colors.bold}⚠ COMPROMISED PACKAGES DETECTED! (${results.compromised.length})${colors.reset}\n`);
+    
+    results.compromised.forEach(pkg => {
+      console.log(`${colors.red}${colors.bold}✗ ${pkg.name}@${pkg.installedVersion}${colors.reset}`);
+      console.log(`  Installed: ${colors.red}${pkg.installedVersion}${colors.reset}`);
+      console.log(`  Compromised versions: ${pkg.compromisedVersions.join(', ')}`);
+      console.log(`  Location: ${pkg.path}`);
+      console.log(`  ${colors.yellow}ACTION: This is a CRITICAL security issue!${colors.reset}\n`);
+    });
+  }
+  
+  if (results.suspicious.length > 0) {
+    console.log(`${colors.yellow}${colors.bold}⚠ SUSPICIOUS PACKAGES (${results.suspicious.length})${colors.reset}\n`);
+    
+    results.suspicious.forEach(pkg => {
+      console.log(`${colors.yellow}⚠ ${pkg.name}@${pkg.installedVersion}${colors.reset}`);
+      console.log(`  Installed: ${pkg.installedVersion}`);
+      console.log(`  Compromised versions: ${colors.red}${pkg.compromisedVersions.join(', ')}${colors.reset}`);
+      console.log(`  Location: ${pkg.path}`);
+      console.log(`  ${colors.cyan}ACTION: Verify this version is safe${colors.reset}\n`);
+    });
+  }
+  
+  console.log(`${colors.green}✓ Safe packages: ${results.safe}${colors.reset}\n`);
+  
+  if (results.compromised.length > 0) {
+    console.log(`${colors.red}${colors.bold}CRITICAL: Your project contains compromised packages!${colors.reset}`);
+    console.log(`\nRecommended actions:`);
+    console.log(`1. ${colors.bold}DELETE node_modules and package-lock.json/yarn.lock${colors.reset}`);
+    console.log(`2. Check which package depends on the compromised one:`);
+    console.log(`   ${colors.cyan}npm ls <package-name>${colors.reset} or ${colors.cyan}yarn why <package-name>${colors.reset}`);
+    console.log(`3. Update or remove the parent package that requires it`);
+    console.log(`4. Run ${colors.cyan}npm install${colors.reset} or ${colors.cyan}yarn install${colors.reset} fresh`);
+    console.log(`5. Rotate all credentials, API keys, and secrets`);
+    console.log(`6. Scan your system for malware`);
+    console.log(`7. Review recent deployments for suspicious activity\n`);
+  } else if (results.suspicious.length > 0) {
+    console.log(`${colors.yellow}WARNING: Some packages have other compromised versions.${colors.reset}`);
+    console.log(`Verify you're using safe versions and update if needed.\n`);
+  } else {
+    console.log(`${colors.green}${colors.bold}✓ No compromised packages detected in dependency tree!${colors.reset}\n`);
+  }
+}
+
 async function main() {
   console.log(`${colors.bold}${colors.magenta}`);
   console.log('╔════════════════════════════════════════════════════════════════╗');
-  console.log('║   Shai-Hulud 2.0 Global NPM Package Security Checker          ║');
-  console.log('║   Protecting against supply chain attacks                     ║');
+  console.log('║   Shai-Hulud 2.0 Deep Package Scanner                         ║');
+  console.log('║   (Scans entire dependency tree)                              ║');
   console.log('╚════════════════════════════════════════════════════════════════╝');
-  console.log(colors.reset);
-  
-  const useInline = process.argv.includes('--inline');
+  console.log(colors.reset + '\n');
   
   try {
-    // Fetch compromised packages list
-    const compromisedData = await fetchCompromisedPackages();
-    const compromisedList = parseCompromisedList(compromisedData);
+    const packageJsonPath = process.argv[2] || './package.json';
+    const projectRoot = path.dirname(path.resolve(packageJsonPath));
     
-    console.log(`${colors.green}✓ Loaded ${compromisedList.size} compromised package entries${colors.reset}\n`);
+    console.log(`${colors.cyan}Scanning: ${packageJsonPath}${colors.reset}\n`);
     
-    // Get global packages
-    const globalData = getGlobalPackages(useInline);
-    const installedPackages = flattenDependencies(globalData.dependencies);
+    const compromisedList = await fetchAllCompromisedPackages();
+    const results = scanAllPackages(projectRoot, compromisedList);
     
-    console.log(`${colors.green}✓ Found ${installedPackages.size} installed packages${colors.reset}\n`);
+    printResults(results);
     
-    // Check for compromised packages
-    const compromisedFound = checkForCompromised(installedPackages, compromisedList);
-    
-    // Display results
-    displayResults(compromisedFound, installedPackages.size);
-    
-    // Exit with appropriate code
-    process.exit(compromisedFound.length > 0 ? 1 : 0);
+    process.exit(results.compromised.length > 0 ? 1 : 0);
     
   } catch (err) {
-    console.error(`${colors.red}${colors.bold}Error: ${err.message}${colors.reset}`);
+    console.error(`${colors.red}Error: ${err.message}${colors.reset}`);
     console.error(err.stack);
     process.exit(2);
   }
 }
 
-// Run if executed directly
 if (require.main === module) {
   main();
 }
 
-module.exports = { fetchCompromisedPackages, getGlobalPackages, checkForCompromised };
+module.exports = { scanAllPackages, fetchAllCompromisedPackages };
