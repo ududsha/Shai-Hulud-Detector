@@ -9,9 +9,9 @@ Shai-Hulud 2.0 (also known as "The Second Coming") is a sophisticated npm supply
 ## Features
 
 - 🔍 Scans all globally installed npm packages (including dependencies)
-- 🌐 Fetches latest compromised package lists from multiple sources
+- 🌐 Fetches the latest compromised package lists from multiple sources
 - 🎨 Clear, color-coded terminal output
-- ⚡ Fast scanning with up to 10 levels of dependency depth
+- ⚡ Full dependency tree scanning
 - 📊 Detailed reporting with remediation steps
 - 🔄 Supports multiple compromised package list formats
 
