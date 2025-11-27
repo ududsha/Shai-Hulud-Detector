@@ -24,26 +24,73 @@ git clone https://github.com/ududsha/Shai-Hulud-Detector.git
 cd Shai-Hulud-Detector
 ```
 
-## Usage
+## How to Run
 
-### Quick Scan (Recommended)
+### Method 1: Quick Scan (Recommended)
 
-Run the detector directly with inline package fetching:
+This is the fastest and easiest way to run the detector:
 
+```bash
+# Navigate to the detector directory
+cd Shai-Hulud-Detector
+
+# Run the detector with inline package fetching
+node detector.js --inline
+```
+
+**What happens:**
+- The tool automatically fetches your global npm packages
+- Retrieves the latest compromised package lists
+- Performs the security scan
+- Displays results in your terminal
+
+### Method 2: Using Saved Package List
+
+If you want to save your package list for later analysis:
+
+```bash
+# Step 1: Navigate to the detector directory
+cd Shai-Hulud-Detector
+
+# Step 2: Export your global packages to a file
+npm list -g --depth=10 --json > global-packages.json
+
+# Step 3: Run the detector (it will automatically use the saved file)
+node detector.js
+```
+
+**Benefits of this method:**
+- Faster repeated scans (no need to re-fetch packages)
+- Useful for offline analysis
+- Can be used in CI/CD pipelines
+
+### Method 3: One-Liner from Any Directory
+
+You can run this from anywhere if you add the shebang:
+
+```bash
+# Make the script executable (one-time setup)
+chmod +x /path/to/Shai-Hulud-Detector/detector.js
+
+# Run from anywhere
+/path/to/Shai-Hulud-Detector/detector.js --inline
+```
+
+### Running in Different Environments
+
+**macOS/Linux:**
 ```bash
 node detector.js --inline
 ```
 
-### Alternative Method
+**Windows (Command Prompt):**
+```cmd
+node detector.js --inline
+```
 
-If you prefer to save the package list first:
-
-```bash
-# 1. Save your global packages list
-npm list -g --depth=10 --json > global-packages.json
-
-# 2. Run the detector
-node detector.js
+**Windows (PowerShell):**
+```powershell
+node detector.js --inline
 ```
 
 ## What the Tool Checks
