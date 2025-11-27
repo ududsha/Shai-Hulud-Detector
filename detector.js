@@ -26,10 +26,22 @@ const colors = {
 };
 
 const COMPROMISED_SOURCES = [
-  'https://raw.githubusercontent.com/gensecaihq/Shai-Hulud-2.0-Detector/main/compromised-packages.json',
-  'https://raw.githubusercontent.com/tenable/shai-hulud-second-coming-affected-packages/main/list.json',
-  'https://raw.githubusercontent.com/Cobenian/shai-hulud-detect/main/compromised-packages.txt',
-  'https://raw.githubusercontent.com/tenable/shai-hulud-second-coming-affected-packages/main/list.md'
+  {
+    name: 'GenSec HQ',
+    url: 'https://raw.githubusercontent.com/gensecaihq/Shai-Hulud-2.0-Detector/main/compromised-packages.json'
+  },
+  {
+    name: 'Tenable (JSON)',
+    url: 'https://raw.githubusercontent.com/tenable/shai-hulud-second-coming-affected-packages/main/list.json'
+  },
+  {
+    name: 'Cobenian',
+    url: 'https://raw.githubusercontent.com/Cobenian/shai-hulud-detect/main/compromised-packages.txt'
+  },
+  {
+    name: 'Tenable (MD)',
+    url: 'https://raw.githubusercontent.com/tenable/shai-hulud-second-coming-affected-packages/main/list.md'
+  }
 ];
 
 function fetchUrl(url) {
@@ -48,7 +60,7 @@ function fetchUrl(url) {
   });
 }
 
-function parseCompromisedList(data) {
+function parseCompromisedList(data, sourceName) {
   const compromised = new Map();
   
   if (typeof data === 'string') {
@@ -64,9 +76,14 @@ function parseCompromisedList(data) {
           const version = parts[1];
           if (name !== 'Package' && version !== 'Version') {
             if (!compromised.has(name)) {
-              compromised.set(name, []);
+              compromised.set(name, { versions: new Map(), sources: new Set() });
             }
-            compromised.get(name).push(version);
+            const pkg = compromised.get(name);
+            if (!pkg.versions.has(version)) {
+              pkg.versions.set(version, new Set());
+            }
+            pkg.versions.get(version).add(sourceName);
+            pkg.sources.add(sourceName);
           }
         }
         return;
@@ -78,9 +95,14 @@ function parseCompromisedList(data) {
         const cleanName = name.trim();
         const cleanVersion = version.trim();
         if (!compromised.has(cleanName)) {
-          compromised.set(cleanName, []);
+          compromised.set(cleanName, { versions: new Map(), sources: new Set() });
         }
-        compromised.get(cleanName).push(cleanVersion);
+        const pkg = compromised.get(cleanName);
+        if (!pkg.versions.has(cleanVersion)) {
+          pkg.versions.set(cleanVersion, new Set());
+        }
+        pkg.versions.get(cleanVersion).add(sourceName);
+        pkg.sources.add(sourceName);
       }
     });
   } else if (typeof data === 'object') {
@@ -89,18 +111,28 @@ function parseCompromisedList(data) {
         const name = pkg.name || pkg.package;
         const version = pkg.version;
         if (!compromised.has(name)) {
-          compromised.set(name, []);
+          compromised.set(name, { versions: new Map(), sources: new Set() });
         }
-        compromised.get(name).push(version);
+        const p = compromised.get(name);
+        if (!p.versions.has(version)) {
+          p.versions.set(version, new Set());
+        }
+        p.versions.get(version).add(sourceName);
+        p.sources.add(sourceName);
       });
     } else if (Array.isArray(data)) {
       data.forEach(pkg => {
         const name = pkg.package || pkg.name;
         const version = pkg.version;
         if (!compromised.has(name)) {
-          compromised.set(name, []);
+          compromised.set(name, { versions: new Map(), sources: new Set() });
         }
-        compromised.get(name).push(version);
+        const p = compromised.get(name);
+        if (!p.versions.has(version)) {
+          p.versions.set(version, new Set());
+        }
+        p.versions.get(version).add(sourceName);
+        p.sources.add(sourceName);
       });
     }
   }
@@ -114,10 +146,10 @@ async function fetchAllCompromisedPackages() {
   console.log(`${colors.blue}Fetching compromised packages from multiple sources...${colors.reset}\n`);
   
   for (let i = 0; i < COMPROMISED_SOURCES.length; i++) {
-    const url = COMPROMISED_SOURCES[i];
+    const source = COMPROMISED_SOURCES[i];
     try {
-      console.log(`Fetching source ${i + 1}/${COMPROMISED_SOURCES.length}...`);
-      const data = await fetchUrl(url);
+      console.log(`Fetching source ${i + 1}/${COMPROMISED_SOURCES.length} (${source.name})...`);
+      const data = await fetchUrl(source.url);
       
       let parsed;
       try {
@@ -126,23 +158,30 @@ async function fetchAllCompromisedPackages() {
         parsed = data;
       }
       
-      const sourceCompromised = parseCompromisedList(parsed);
-      for (const [name, versions] of sourceCompromised) {
+      const sourceCompromised = parseCompromisedList(parsed, source.name);
+      
+      // Merge with all compromised
+      for (const [name, pkgData] of sourceCompromised) {
         if (!allCompromised.has(name)) {
-          allCompromised.set(name, []);
+          allCompromised.set(name, { versions: new Map(), sources: new Set() });
         }
-        allCompromised.get(name).push(...versions);
+        const existing = allCompromised.get(name);
+        
+        for (const [version, sources] of pkgData.versions) {
+          if (!existing.versions.has(version)) {
+            existing.versions.set(version, new Set());
+          }
+          for (const src of sources) {
+            existing.versions.get(version).add(src);
+            existing.sources.add(src);
+          }
+        }
       }
       
       console.log(`${colors.green}✓ Success${colors.reset}`);
     } catch (err) {
       console.log(`${colors.yellow}⚠ Failed: ${err.message}${colors.reset}`);
     }
-  }
-  
-  // Deduplicate versions
-  for (const [name, versions] of allCompromised) {
-    allCompromised.set(name, [...new Set(versions)]);
   }
   
   console.log(`\n${colors.green}Total unique packages: ${allCompromised.size}${colors.reset}\n`);
@@ -248,21 +287,29 @@ function scanAllPackages(projectRoot, compromisedList) {
   };
   
   for (const [name, info] of allPackages) {
-    const compromisedVersions = compromisedList.get(name);
+    const compromisedData = compromisedList.get(name);
     
-    if (compromisedVersions) {
-      if (compromisedVersions.includes(info.version)) {
+    if (compromisedData) {
+      const allVersions = Array.from(compromisedData.versions.keys());
+      const sources = compromisedData.versions.get(info.version);
+      
+      if (sources) {
+        // Exact version match - COMPROMISED
         results.compromised.push({
           name,
           installedVersion: info.version,
-          compromisedVersions,
+          compromisedVersions: allVersions,
+          sources: Array.from(sources),
+          allSources: Array.from(compromisedData.sources),
           path: info.path
         });
       } else {
+        // Package name matches but different version - SUSPICIOUS
         results.suspicious.push({
           name,
           installedVersion: info.version,
-          compromisedVersions,
+          compromisedVersions: allVersions,
+          sources: Array.from(compromisedData.sources),
           path: info.path
         });
       }
@@ -288,6 +335,7 @@ function printResults(results) {
       console.log(`${colors.red}${colors.bold}✗ ${pkg.name}@${pkg.installedVersion}${colors.reset}`);
       console.log(`  Installed: ${colors.red}${pkg.installedVersion}${colors.reset}`);
       console.log(`  Compromised versions: ${pkg.compromisedVersions.join(', ')}`);
+      console.log(`  ${colors.bold}Found in sources: ${colors.cyan}${pkg.sources.join(', ')}${colors.reset}`);
       console.log(`  Location: ${pkg.path}`);
       console.log(`  ${colors.yellow}ACTION: This is a CRITICAL security issue!${colors.reset}\n`);
     });
@@ -300,6 +348,7 @@ function printResults(results) {
       console.log(`${colors.yellow}⚠ ${pkg.name}@${pkg.installedVersion}${colors.reset}`);
       console.log(`  Installed: ${pkg.installedVersion}`);
       console.log(`  Compromised versions: ${colors.red}${pkg.compromisedVersions.join(', ')}${colors.reset}`);
+      console.log(`  ${colors.bold}Sources: ${colors.cyan}${pkg.sources.join(', ')}${colors.reset}`);
       console.log(`  Location: ${pkg.path}`);
       console.log(`  ${colors.cyan}ACTION: Verify this version is safe${colors.reset}\n`);
     });
