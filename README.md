@@ -26,16 +26,8 @@ cd Shai-Hulud-Detector
 
 ## How to Run
 
-### Method 1: Quick Scan (Recommended)
-
-This is the fastest and easiest way to run the detector:
-
-```bash
-# Navigate to the detector directory
-cd Shai-Hulud-Detector
-
-# Run the detector with inline package fetching
-node detector.js --inline
+#Copy the detector.js to your codebase's root folder and run the following command:
+node detector.js
 ```
 
 **What happens:**
@@ -44,20 +36,6 @@ node detector.js --inline
 - Performs the security scan
 - Displays results in your terminal
 
-### Method 2: Using Saved Package List
-
-If you want to save your package list for later analysis:
-
-```bash
-# Step 1: Navigate to the detector directory
-cd Shai-Hulud-Detector
-
-# Step 2: Export your global packages to a file
-npm list -g --depth=10 --json > global-packages.json
-
-# Step 3: Run the detector (it will automatically use the saved file)
-node detector.js
-```
 
 **Benefits of this method:**
 - Faster repeated scans (no need to re-fetch packages)
@@ -74,23 +52,6 @@ chmod +x /path/to/Shai-Hulud-Detector/detector.js
 
 # Run from anywhere
 /path/to/Shai-Hulud-Detector/detector.js --inline
-```
-
-### Running in Different Environments
-
-**macOS/Linux:**
-```bash
-node detector.js --inline
-```
-
-**Windows (Command Prompt):**
-```cmd
-node detector.js --inline
-```
-
-**Windows (PowerShell):**
-```powershell
-node detector.js --inline
 ```
 
 ## What the Tool Checks
