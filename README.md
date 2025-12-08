@@ -26,33 +26,15 @@ cd Shai-Hulud-Detector
 
 ## How to Run
 
-#Copy the detector.js to your codebase's root folder and run the following command:
-node detector.js
-```
+Copy the detector.js to your codebase's root folder and run the following command:
+```node detector.js```
+
 
 **What happens:**
 - The tool automatically fetches your global npm packages
 - Retrieves the latest compromised package lists
 - Performs the security scan
 - Displays results in your terminal
-
-
-**Benefits of this method:**
-- Faster repeated scans (no need to re-fetch packages)
-- Useful for offline analysis
-- Can be used in CI/CD pipelines
-
-### Method 3: One-Liner from Any Directory
-
-You can run this from anywhere if you add the shebang:
-
-```bash
-# Make the script executable (one-time setup)
-chmod +x /path/to/Shai-Hulud-Detector/detector.js
-
-# Run from anywhere
-/path/to/Shai-Hulud-Detector/detector.js --inline
-```
 
 ## What the Tool Checks
 
